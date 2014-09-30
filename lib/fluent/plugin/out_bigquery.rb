@@ -62,7 +62,6 @@ module Fluent
     config_param :tables, :string, :default => nil
 
     config_param :schema_path, :string, :default => nil
-    config_param :fetch_schema, :bool, :default => false
     config_param :field_string,  :string, :default => nil
     config_param :field_integer, :string, :default => nil
     config_param :field_float,   :string, :default => nil
@@ -72,6 +71,13 @@ module Fluent
     ###  At streaming inserts, schema cannot be specified
     # config_param :field_record,  :string, :defualt => nil
     # config_param :optional_data_field, :string, :default => nil
+
+    config_param :fetch_schema, :bool, :default => false
+
+    # fetch_schema_interval
+    #   If set fetch_interval > 0, fetch schema at specified interval and update schema if changed.
+    #   Default value is 0, it means fetch schema only plugin start.
+    config_param :fetch_schema_interval, :integer, :default => 0
 
     config_param :time_format, :string, :default => nil
     config_param :localtime, :bool, :default => nil
@@ -203,12 +209,19 @@ module Fluent
       @tables_queue = @tablelist.dup.shuffle
       @tables_mutex = Mutex.new
 
-      fetch_schema() if @fetch_schema
+      @running = true
+      @thread = nil
+
+      if @fetch_schema
+        @fields.load_schema(fetch_schema(), false)
+        @fetch_schema_thread = Thread.new(&method(:schema_fetcher)) if @fetch_schema_interval > 0
+      end
     end
 
     def shutdown
+      @running = false
+      @thread.join if @thread
       super
-      # nothing to do
     end
 
     def client
@@ -342,7 +355,27 @@ module Fluent
       res_obj = JSON.parse(res.body)
       schema = res_obj['schema']['fields']
       log.debug "Load schema from BigQuery: #{@project}:#{@dataset}.#{table_id} #{schema}"
-      @fields.load_schema(schema, false)
+      schema
+    end
+
+    def schema_fetcher
+      while @running
+        fetch_success = false
+        new_fields = RecordSchema.new('record')
+
+        begin
+          new_schema = fetch_schema()
+          load_schema(new_schema, false)
+          fetch_success = true
+        rescue => e
+          log.warn "Background fetch schema failed", :error => e.message
+        end
+
+        @tables_mutex.synchronize {
+          @fields = new_fields if fetch_success and @fields.schema != new_fields.schema
+        }
+        sleep(@fetch_schema_interval)
+      end
     end
 
     # def client_oauth # not implemented
@@ -462,6 +495,7 @@ module Fluent
       def initialize(name, mode = :nullable)
         super(name, mode)
         @fields = {}
+        @schema = []
       end
 
       def type
@@ -492,6 +526,7 @@ module Fluent
             field_schema.load_schema(field['fields'], allow_overwrite)
           end
         end
+        @schema = schema
       end
 
       def register_field(name, type)
