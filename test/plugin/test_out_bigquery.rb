@@ -636,6 +636,35 @@ class BigQueryOutputTest < Test::Unit::TestCase
     assert_equal 'foo_2014_08_11', table_id
   end
 
+  def test_field_schema_as_json
+    field = Fluent::BigQueryOutput::StringFieldSchema.new('user', :required)
+    expect = {
+      name: "user",
+      type: "STRING",
+      mode: "REQUIRED"
+    }
+    assert_equal expect, field.as_json
+  end
+
+  def test_fields_schema_as_json
+    fields = []
+    fields << Fluent::BigQueryOutput::StringFieldSchema.new('user', :required)
+    fields << Fluent::BigQueryOutput::FloatFieldSchema.new('score', :nullable)
+    expect = [
+      {
+        name: "user",
+        type: "STRING",
+        mode: "REQUIRED"
+      },
+      {
+        name: "score",
+        type: "FLOAT",
+        mode: "NULLABLE"
+      },      
+    ]
+    assert_equal expect, fields.map(&:as_json)
+  end
+
   private
 
   def sudo_schema_response

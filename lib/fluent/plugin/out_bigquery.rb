@@ -63,6 +63,7 @@ module Fluent
 
     config_param :schema_path, :string, :default => nil
     config_param :fetch_schema, :bool, :default => false
+    config_param :base_schema_table, :string, :default => nil
     config_param :field_string,  :string, :default => nil
     config_param :field_integer, :string, :default => nil
     config_param :field_float,   :string, :default => nil
@@ -208,8 +209,12 @@ module Fluent
 
       @tables_queue = @tablelist.dup.shuffle
       @tables_mutex = Mutex.new
+      @current_tables = Hash[@tablelist.dup.map{|t| [t, '']}]
 
-      fetch_schema() if @fetch_schema
+      if @fetch_schema
+        @base_schema_table ||= @tablelist.dup.first
+        fetch_schema()
+      end
     end
 
     def shutdown
@@ -255,6 +260,11 @@ module Fluent
 
     def insert(table_id_format, rows)
       table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now))
+      if @current_tables[table_id_format] != table_id
+        create_table(table_id) unless table_exists?(table_id)
+        @current_tables[table_id_format] = table_id
+      end
+
       res = client().execute(
         :api_method => @bq.tabledata.insert_all,
         :parameters => {
@@ -317,16 +327,9 @@ module Fluent
     end
 
     def fetch_schema
-      table_id_format = @tablelist[0]
+      table_id_format = @base_schema_table
       table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now))
-      res = client.execute(
-        :api_method => @bq.tables.get,
-        :parameters => {
-          'projectId' => @project,
-          'datasetId' => @dataset,
-          'tableId' => table_id,
-        }
-      )
+      res = get_table(table_id)
 
       unless res.success?
         # api_error? -> client cache clear
@@ -349,6 +352,60 @@ module Fluent
       schema = res_obj['schema']['fields']
       log.debug "Load schema from BigQuery: #{@project}:#{@dataset}.#{table_id} #{schema}"
       @fields.load_schema(schema, false)
+    end
+
+    def get_table(table_id)
+      client.execute(
+        :api_method => @bq.tables.get,
+        :parameters => {
+          'projectId' => @project,
+          'datasetId' => @dataset,
+          'tableId' => table_id,
+        }
+      )
+    end
+
+    def table_exists?(table_id)
+      get_table(table_id).success?
+    end
+
+    def create_table(table_id)
+      res = client.execute(
+        :api_method => @bq.tables.insert,
+        :parameters => {
+          'projectId' => @project,
+          'datasetId' => @dataset
+        },
+        body_object: {
+          'tableReference' => {
+            'projectId' => @project,
+            'datasetId' => @dataset,
+            'tableId' => table_id
+          },
+          'schema' => {
+            'fields' => @fields.as_json
+          }
+        }
+      )
+
+      unless res.success?
+        # api_error? -> client cache clear
+        @cached_client = nil
+
+        message = res.body
+        if res.body =~ /^\{/
+          begin
+            res_obj = JSON.parse(res.body)
+            message = res_obj['error']['message'] || res.body
+          rescue => e
+            log.warn "Parse error: google api error response body", :body => res.body
+          end
+        end
+        log.error "tabledata.insert API", :project_id => @project, :dataset => @dataset, :table => table_id, :code => res.status, :message => message
+        raise "failed to create table to bigquery" # TODO: error class
+      end
+
+      res
     end
 
     # def client_oauth # not implemented
@@ -402,6 +459,14 @@ module Fluent
 
       def format_one(value)
         raise NotImplementedError, "Must implement in a subclass" 
+      end
+
+      def as_json
+        {
+          name: @name,
+          type: type.to_s.upcase,
+          mode: @mode.to_s.upcase
+        }
       end
     end
 
@@ -525,6 +590,12 @@ module Fluent
           out[key] = formatted
         end
         out
+      end
+
+      def as_json
+        @fields.map do |key, schema|
+          schema.as_json
+        end
       end
 
       private
