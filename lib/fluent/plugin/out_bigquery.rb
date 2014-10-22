@@ -451,7 +451,11 @@ module Fluent
       end
 
       def format_one(value)
-        Time.at(Time.parse(value)).utc.strftime('%s')
+        if value.is_a?(String)
+          Time.at(Time.parse(value)).utc.strftime('%s').to_i
+        else
+          value
+        end
       end
     end
 

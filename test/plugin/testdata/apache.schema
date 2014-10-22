@@ -92,6 +92,11 @@
         "name": "bytes",
         "type": "INTEGER",
         "mode": "REQUIRED"
+      },
+      {
+        "name": "time",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
       }
     ]
   }

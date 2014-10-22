@@ -307,6 +307,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
         "response" => {
           "status" => "1",
           "bytes" => 3.0,
+          "time" => (now - 1).strftime("%Y-%m-%d %H:%M:%S"),
         },
         "remote" => {
           "host" => "remote.example",
@@ -343,6 +344,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
         "response" => {
           "status" => 1,
           "bytes" => 3,
+          "time" => (now - 1).to_i
         },
       }
     }
